@@ -4,6 +4,7 @@ import numpy as np
 import tensorflow as tf
 import joblib
 import time
+import os
 
 # ==================== PAGE CONFIG ====================
 st.set_page_config(
@@ -15,104 +16,68 @@ st.set_page_config(
 # ==================== CYBER ANIMATED CSS ====================
 st.markdown("""
 <style>
-
-/* -------- BACKGROUND ANIMATION -------- */
 @keyframes gradientBG {
     0% {background-position: 0% 50%;}
     50% {background-position: 100% 50%;}
     100% {background-position: 0% 50%;}
 }
-
 .stApp {
     background: linear-gradient(-45deg, #020024, #050a30, #000000, #020024);
     background-size: 400% 400%;
     animation: gradientBG 18s ease infinite;
     color: white;
 }
-
-/* -------- FLOAT ANIMATION -------- */
-@keyframes float {
-    0% {transform: translateY(0px);}
-    50% {transform: translateY(-12px);}
-    100% {transform: translateY(0px);}
-}
-
-/* -------- SCAN LINE -------- */
-@keyframes scan {
-    0% {top: -10%;}
-    100% {top: 110%;}
-}
-
-.scan-line {
-    position: fixed;
-    width: 100%;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, #00f5d4, transparent);
-    animation: scan 6s linear infinite;
-    opacity: 0.6;
-    z-index: 0;
-}
-
-/* -------- TITLES -------- */
 .main-title {
     font-size: 50px;
     font-weight: 900;
     color: #00f5d4;
     text-align: center;
-    animation: float 4s ease-in-out infinite;
 }
-
 .sub-title {
     font-size: 20px;
     color: #9ca3af;
     text-align: center;
 }
-
-/* -------- CARDS -------- */
 .card {
     background: rgba(22, 27, 34, 0.9);
     padding: 22px;
     border-radius: 18px;
     box-shadow: 0 0 25px rgba(0,245,212,0.25);
-    transition: all 0.4s ease;
-    animation: float 6s ease-in-out infinite;
 }
-
-.card:hover {
-    transform: translateY(-10px) scale(1.05);
-    box-shadow: 0 0 40px rgba(0,245,212,0.7);
-}
-
-/* -------- TABLE GLOW -------- */
-[data-testid="stDataFrame"] {
-    background: rgba(0,0,0,0.4);
-    border-radius: 12px;
-    box-shadow: 0 0 15px rgba(0,245,212,0.2);
-}
-
-/* -------- FOOTER -------- */
 .footer {
     text-align: center;
     color: #9ca3af;
     margin-top: 50px;
-    animation: float 5s ease-in-out infinite;
 }
-
 </style>
-
-<div class="scan-line"></div>
 """, unsafe_allow_html=True)
 
 # ==================== LOAD MODEL ====================
 @st.cache_resource
-def load_model():
-    model = tf.keras.models.load_model("efficientstnet_best_model.h5")
-    scaler = joblib.load("scaler.pkl")
-    return model, scaler
+def load_artifacts():
+    try:
+        if not os.path.exists("efficientstnet_best_model.h5"):
+            st.error("Model file not found!")
+            st.stop()
 
-model, scaler = load_model()
+        model = tf.keras.models.load_model(
+            "efficientstnet_best_model.h5",
+            compile=False,
+            safe_mode=False
+        )
 
-# ==================== LABEL MAP (SAFE) ====================
+        scaler = joblib.load("scaler.pkl")
+
+        return model, scaler
+
+    except Exception as e:
+        st.error("Model loading failed.")
+        st.exception(e)
+        st.stop()
+
+model, scaler = load_artifacts()
+
+# ==================== LABEL MAP ====================
 label_map = {
     0: "BENIGN",
     1: "DNS ATTACK",
@@ -135,57 +100,68 @@ confidence_view = st.sidebar.checkbox("Show prediction confidence")
 uploaded_file = st.file_uploader("📂 Upload Network Traffic CSV", type=["csv"])
 
 if uploaded_file is not None:
-    df = pd.read_csv(uploaded_file)
+    try:
+        df = pd.read_csv(uploaded_file)
 
-    if show_raw:
-        st.subheader("📄 Uploaded Data Preview")
-        st.dataframe(df.head())
+        if show_raw:
+            st.subheader("📄 Uploaded Data Preview")
+            st.dataframe(df.head())
 
-    if "Label" in df.columns:
-        df = df.drop(columns=["Label"])
+        if "Label" in df.columns:
+            df = df.drop(columns=["Label"])
 
-    # ==================== PROCESS ====================
-    with st.spinner("🔍 Analyzing network traffic patterns..."):
-        time.sleep(1.2)
+        # ==================== PROCESS ====================
+        with st.spinner("🔍 Analyzing network traffic patterns..."):
+            time.sleep(1)
 
-        X = scaler.transform(df)
-        X = X.reshape(X.shape[0], 7, 11)
+            X = scaler.transform(df)
 
-        preds = model.predict(X)
-        classes = np.argmax(preds, axis=1)
+            # Safety reshape
+            if X.shape[1] != 77:
+                st.error(f"Expected 77 features, got {X.shape[1]}")
+                st.stop()
 
-    st.success("✅ Analysis completed successfully")
+            X = X.reshape(X.shape[0], 7, 11)
 
-    # ==================== RESULTS ====================
-    results = pd.DataFrame()
-    results["Prediction"] = [
-        label_map.get(int(c), f"UNKNOWN ({int(c)})")
-        for c in classes
-    ]
+            preds = model.predict(X)
+            classes = np.argmax(preds, axis=1)
 
-    st.markdown("## 🚨 Detection Results")
+        st.success("✅ Analysis completed successfully")
 
-    col1, col2, col3 = st.columns(3)
+        # ==================== RESULTS ====================
+        results = pd.DataFrame()
+        results["Prediction"] = [
+            label_map.get(int(c), f"UNKNOWN ({int(c)})")
+            for c in classes
+        ]
 
-    total = len(results)
-    attacks = results[results["Prediction"] != "BENIGN"].shape[0]
-    benign = total - attacks
+        st.markdown("## 🚨 Detection Results")
 
-    col1.markdown(f"<div class='card'>📊 <b>Total Flows</b><br><h2>{total}</h2></div>", unsafe_allow_html=True)
-    col2.markdown(f"<div class='card'>🚨 <b>Attacks Detected</b><br><h2>{attacks}</h2></div>", unsafe_allow_html=True)
-    col3.markdown(f"<div class='card'>🟢 <b>Benign Traffic</b><br><h2>{benign}</h2></div>", unsafe_allow_html=True)
+        col1, col2, col3 = st.columns(3)
 
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.dataframe(results, use_container_width=True)
+        total = len(results)
+        attacks = results[results["Prediction"] != "BENIGN"].shape[0]
+        benign = total - attacks
 
-    # ==================== CONFIDENCE VIEW ====================
-    if confidence_view:
-        st.subheader("📈 Prediction Confidence")
-        confidence_df = pd.DataFrame(
-            preds,
-            columns=[f"Class_{i}" for i in range(preds.shape[1])]
-        )
-        st.dataframe(confidence_df.head(), use_container_width=True)
+        col1.markdown(f"<div class='card'>📊 <b>Total Flows</b><br><h2>{total}</h2></div>", unsafe_allow_html=True)
+        col2.markdown(f"<div class='card'>🚨 <b>Attacks Detected</b><br><h2>{attacks}</h2></div>", unsafe_allow_html=True)
+        col3.markdown(f"<div class='card'>🟢 <b>Benign Traffic</b><br><h2>{benign}</h2></div>", unsafe_allow_html=True)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.dataframe(results, use_container_width=True)
+
+        # ==================== CONFIDENCE ====================
+        if confidence_view:
+            st.subheader("📈 Prediction Confidence")
+            confidence_df = pd.DataFrame(
+                preds,
+                columns=[f"Class_{i}" for i in range(preds.shape[1])]
+            )
+            st.dataframe(confidence_df.head(), use_container_width=True)
+
+    except Exception as e:
+        st.error("Prediction failed.")
+        st.exception(e)
 
 # ==================== FOOTER ====================
 st.markdown("""
